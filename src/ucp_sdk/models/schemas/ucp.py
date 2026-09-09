@@ -197,7 +197,7 @@ class PlatformSchema(Base):
         extra="allow",
     )
     services: dict[
-        reverse_domain_name.ReverseDomainName, list[service.PlatformSchema6]
+        reverse_domain_name.ReverseDomainName, list[service.PlatformSchema9]
     ]
     """
     Service registry keyed by reverse-domain name.

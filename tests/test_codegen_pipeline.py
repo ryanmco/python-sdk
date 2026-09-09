@@ -3265,5 +3265,251 @@ class FulfillmentMethodDestinationRetypingSemanticTest(unittest.TestCase):
         self._method()(id="m4", type="shipping", line_item_ids=["li1"])
 
 
+class ExtensionCompositionTest(unittest.TestCase):
+    def test_build_extension_compositions(self):
+        target = Path("/tmp/schemas")
+        schemas = {
+            "/tmp/schemas/shopping/checkout.json": {
+                "name": "dev.ucp.shopping.checkout"
+            },
+            "/tmp/schemas/shopping/cart.json": {
+                "name": "dev.ucp.shopping.cart"
+            },
+            "/tmp/schemas/shopping/fulfillment.json": {
+                "name": "dev.ucp.shopping.fulfillment",
+                "$defs": {
+                    "dev.ucp.shopping.checkout": {},
+                    "fulfillment": {},
+                },
+            },
+            "/tmp/schemas/shopping/discount.json": {
+                "name": "dev.ucp.shopping.discount",
+                "$defs": {
+                    "dev.ucp.shopping.checkout": {},
+                    "dev.ucp.shopping.cart": {},
+                },
+            },
+        }
+        schema_names = {
+            "dev.ucp.shopping.checkout": "/tmp/schemas/shopping/checkout.json",
+            "dev.ucp.shopping.cart": "/tmp/schemas/shopping/cart.json",
+            "dev.ucp.shopping.fulfillment": "/tmp/schemas/shopping/fulfillment.json",
+            "dev.ucp.shopping.discount": "/tmp/schemas/shopping/discount.json",
+        }
+        res = preprocess_schemas.build_extension_compositions(
+            schemas, schema_names, target
+        )
+        self.assertEqual(
+            res,
+            {
+                "checkout": "shopping/checkout.json",
+                "cart": "shopping/cart.json",
+            },
+        )
+        self.assertEqual(
+            preprocess_schemas.build_extension_compositions(
+                schemas, None, target
+            ),
+            {},
+        )
+
+    def test_compose_extension_defs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            chk_path = str((root / "checkout.json").resolve())
+            ful_path = str((root / "fulfillment.json").resolve())
+            composed_path = str((root / "checkout_composed.json").resolve())
+            schemas = {
+                chk_path: {
+                    "$id": "https://ucp.dev/schemas/checkout.json",
+                    "title": "Checkout",
+                    "name": "dev.ucp.shopping.checkout",
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                },
+                ful_path: {
+                    "$id": "https://ucp.dev/schemas/fulfillment.json",
+                    "name": "dev.ucp.shopping.fulfillment",
+                    "$defs": {
+                        "fulfillment": {
+                            "type": "object",
+                            "properties": {"type": {"type": "string"}},
+                        },
+                        "dev.ucp.shopping.checkout": {
+                            "allOf": [
+                                {"$ref": "checkout.json"},
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "fulfillment": {
+                                            "$ref": "#/$defs/fulfillment",
+                                            "ucp_request": {
+                                                "create": "optional"
+                                            },
+                                        }
+                                    },
+                                },
+                            ]
+                        },
+                    },
+                },
+            }
+            schema_names = {
+                "dev.ucp.shopping.checkout": chk_path,
+                "dev.ucp.shopping.fulfillment": ful_path,
+            }
+            extension_compositions = (
+                preprocess_schemas.build_extension_compositions(
+                    schemas, schema_names, root
+                )
+            )
+            composed = preprocess_schemas.compose_extension_defs(
+                schemas, root, extension_compositions
+            )
+
+            # Base schema is unmutated
+            chk = schemas[chk_path]
+            self.assertNotIn("fulfillment", chk["properties"])
+            self.assertIn("id", chk["properties"])
+
+            # Extension schema preserves its defs
+            ful = schemas[ful_path]
+            self.assertIn("dev.ucp.shopping.checkout", ful["$defs"])
+            self.assertIn("fulfillment", ful["$defs"])
+
+            # Composed schema is created and registered
+            self.assertIn(composed_path, composed)
+            self.assertIn(composed_path, schemas)
+            chk_comp = schemas[composed_path]
+            self.assertEqual(chk_comp["title"], "Checkout Composed")
+            self.assertEqual(
+                chk_comp["name"], "dev.ucp.shopping.checkout_composed"
+            )
+            self.assertEqual(
+                chk_comp["$id"],
+                "https://ucp.dev/schemas/checkout_composed.json",
+            )
+            self.assertIn("id", chk_comp["properties"])
+            self.assertIn("fulfillment", chk_comp["properties"])
+            self.assertEqual(
+                chk_comp["properties"]["fulfillment"]["$ref"],
+                "fulfillment.json#/$defs/fulfillment",
+            )
+            self.assertEqual(
+                chk_comp["properties"]["fulfillment"]["ucp_request"],
+                {"create": "optional"},
+            )
+
+    def test_main_end_to_end_extension_composition(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "shopping").mkdir(parents=True, exist_ok=True)
+            preprocess_schemas.save_json(
+                {
+                    "$defs": {
+                        "entity": {
+                            "type": "object",
+                            "properties": {"id": {"type": "string"}},
+                        }
+                    }
+                },
+                root / "ucp.json",
+            )
+            preprocess_schemas.save_json(
+                {
+                    "$id": "https://ucp.dev/schemas/shopping/checkout.json",
+                    "name": "dev.ucp.shopping.checkout",
+                    "title": "Checkout",
+                    "type": "object",
+                    "allOf": [{"$ref": "../ucp.json#/$defs/entity"}],
+                    "properties": {
+                        "buyer": {
+                            "type": "string",
+                            "ucp_request": {"create": "required"},
+                        }
+                    },
+                },
+                root / "shopping" / "checkout.json",
+            )
+            preprocess_schemas.save_json(
+                {
+                    "$id": "https://ucp.dev/schemas/shopping/fulfillment.json",
+                    "name": "dev.ucp.shopping.fulfillment",
+                    "title": "Fulfillment",
+                    "type": "object",
+                    "$defs": {
+                        "fulfillment": {
+                            "type": "object",
+                            "properties": {"method": {"type": "string"}},
+                        },
+                        "dev.ucp.shopping.checkout": {
+                            "allOf": [
+                                {"$ref": "checkout.json"},
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "fulfillment": {
+                                            "$ref": "#/$defs/fulfillment",
+                                            "ucp_request": {
+                                                "create": "optional"
+                                            },
+                                        }
+                                    },
+                                },
+                            ]
+                        },
+                    },
+                },
+                root / "shopping" / "fulfillment.json",
+            )
+
+            with (
+                mock.patch.object(
+                    sys, "argv", ["preprocess_schemas.py", str(root)]
+                ),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                preprocess_schemas.main()
+
+            # Base checkout schema remains untouched
+            chk = preprocess_schemas.load_json(
+                root / "shopping" / "checkout.json"
+            )
+            self.assertIn("buyer", chk["properties"])
+            self.assertNotIn("fulfillment", chk["properties"])
+
+            chk_create = preprocess_schemas.load_json(
+                root / "shopping" / "checkout_create_request.json"
+            )
+            self.assertIn("buyer", chk_create["properties"])
+            self.assertNotIn("fulfillment", chk_create["properties"])
+
+            # Composed checkout schema and its variants are created
+            chk_comp = preprocess_schemas.load_json(
+                root / "shopping" / "checkout_composed.json"
+            )
+            self.assertEqual(chk_comp["title"], "Checkout Composed")
+            self.assertIn("buyer", chk_comp["properties"])
+            self.assertIn("fulfillment", chk_comp["properties"])
+            self.assertEqual(
+                chk_comp["properties"]["fulfillment"]["$ref"],
+                "fulfillment.json#/$defs/fulfillment",
+            )
+
+            chk_comp_create = preprocess_schemas.load_json(
+                root / "shopping" / "checkout_composed_create_request.json"
+            )
+            self.assertIn("buyer", chk_comp_create["properties"])
+            self.assertIn("fulfillment", chk_comp_create["properties"])
+            self.assertEqual(chk_comp_create["required"], ["buyer"])
+
+            # Fulfillment keeps its definitions
+            ful = preprocess_schemas.load_json(
+                root / "shopping" / "fulfillment.json"
+            )
+            self.assertIn("checkout", ful.get("$defs", {}))
+            self.assertIn("fulfillment", ful.get("$defs", {}))
+
+
 if __name__ == "__main__":
     unittest.main()

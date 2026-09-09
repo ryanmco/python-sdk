@@ -212,7 +212,7 @@ class PlatformSchema(Base):
     )
     services: dict[
         reverse_domain_name_update_request.ReverseDomainNameUpdateRequest,
-        list[service.PlatformSchema6],
+        list[service.PlatformSchema9],
     ]
     """
     Service registry keyed by reverse-domain name.

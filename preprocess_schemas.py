@@ -14,6 +14,7 @@
 
 import json
 import copy
+import os
 from pathlib import Path
 import sys
 
@@ -455,6 +456,157 @@ def flatten_dotted_defs(schema):
     return rename_map
 
 
+# --- Extension Composition ---
+
+
+def build_extension_compositions(schemas, schema_names=None, target_dir=None):
+    """Builds the extension_compositions mapping from schema_names and $defs.
+
+    For each schema, checks if any top-level $defs property corresponds to a
+    known base schema (matching the schema's 'name' property directly).
+    If so, maps the composition def name to the base schema path relative to target_dir.
+    """
+    extension_compositions = {}
+    if schema_names is None:
+        return extension_compositions
+
+    target_dir_path = Path(target_dir).resolve() if target_dir else None
+    for ext_path, ext_schema in schemas.items():
+        if not isinstance(ext_schema, dict):
+            continue
+        defs = ext_schema.get("$defs", {})
+        for def_key in defs:
+            if def_key not in schema_names:
+                continue
+            base_path = schema_names[def_key]
+            comp_key = def_key.split(".")[-1]
+
+            if Path(base_path).resolve() == Path(ext_path).resolve():
+                continue  # Skip self-reference
+
+            if target_dir_path:
+                rel = Path(
+                    os.path.relpath(base_path, target_dir_path)
+                ).as_posix()
+            else:
+                rel = base_path
+            extension_compositions[comp_key] = rel
+
+    return extension_compositions
+
+
+def _rewrite_local_to_external_refs(node, ext_rel_path):
+    """Rewrites ``#/`` local refs in *node* to external refs via *ext_rel_path*.
+
+    When a property definition is moved from an extension schema to a base
+    schema, any local JSON-pointer refs (``#/$defs/X``) become invalid
+    because the base schema has no such def.  This function prefixes them
+    with the relative path to the extension file so they resolve correctly
+    from the base schema's location (e.g. ``#/$defs/X`` becomes
+    ``ext.json#/$defs/X``).
+    """
+    for n in iter_nodes(node):
+        if not isinstance(n, dict):
+            continue
+        ref = n.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/"):
+            n["$ref"] = ext_rel_path + ref
+
+
+def compose_extension_defs(
+    schemas,
+    target_dir,
+    extension_compositions,
+):
+    """Create new composed schema files for base capabilities with all extensions.
+
+    UCP extension schemas (fulfillment, discount, buyer_consent, cart) declare
+    composition defs (e.g. a ``checkout`` def extending ``checkout.json`` with
+    extra properties). For each base capability with extensions, this function
+    creates a separate composed schema file (e.g. ``checkout_composed.json``)
+    combining the base capability with all contributed extension properties,
+    without mutating the original base schema or deleting extension defs.
+
+    This function:
+    1. Looks up base schemas for each discovered composition def.
+    2. Collects contributed properties from contributing extension schemas.
+    3. Rewrites local ``$ref`` pointers to external refs (relative to the
+       base schema).
+    4. Creates a new composed schema (``{stem}_composed.json``) merging all
+       contributed properties onto a copy of the base schema.
+    5. Adds the composed schema to ``schemas`` so that it is saved and request
+       variants are generated downstream.
+    """
+    composed_schemas = {}
+    for def_name, base_rel in extension_compositions.items():
+        base_path = str((target_dir / base_rel).resolve())
+        if base_path not in schemas:
+            continue
+
+        base_path_obj = Path(base_path)
+        base_dir = base_path_obj.parent
+        composed_stem = f"{base_path_obj.stem}_composed"
+        composed_filename = f"{composed_stem}.json"
+        composed_path = str((base_dir / composed_filename).resolve())
+
+        if composed_path in composed_schemas:
+            composed_schema = composed_schemas[composed_path]
+        else:
+            composed_schema = copy.deepcopy(schemas[base_path])
+            if "title" in composed_schema:
+                composed_schema["title"] = (
+                    f"{composed_schema['title']} Composed"
+                )
+            if "name" in composed_schema:
+                composed_schema["name"] = f"{composed_schema['name']}_composed"
+            if "$id" in composed_schema:
+                id_str = composed_schema["$id"]
+                if id_str.endswith(".json"):
+                    id_str = id_str.rsplit("/", 1)[0] + "/" + composed_filename
+                composed_schema["$id"] = id_str
+
+        has_contributions = False
+        for ext_path in list(schemas):
+            if ext_path in (base_path, composed_path):
+                continue
+
+            ext_schema = schemas[ext_path]
+            defs = ext_schema.get("$defs", {})
+            comp_def = defs.get(def_name)
+            if comp_def is None and "name" in schemas[base_path]:
+                comp_def = defs.get(schemas[base_path]["name"])
+            if not isinstance(comp_def, dict):
+                continue
+
+            # Collect contributed properties from inline allOf items and top-level properties
+            contributed_props = {}
+            for item in comp_def.get("allOf", []):
+                if isinstance(item, dict) and "properties" in item:
+                    contributed_props.update(item["properties"])
+            if "properties" in comp_def and isinstance(
+                comp_def["properties"], dict
+            ):
+                contributed_props.update(comp_def["properties"])
+
+            if contributed_props:
+                ext_rel = Path(os.path.relpath(ext_path, base_dir)).as_posix()
+                props_copy = copy.deepcopy(contributed_props)
+                _rewrite_local_to_external_refs(props_copy, ext_rel)
+                composed_schema.setdefault("properties", {}).update(props_copy)
+                has_contributions = True
+
+                sys.stdout.write(
+                    f"Composed {def_name} from {Path(ext_path).name} "
+                    f"into {composed_filename}\n"
+                )
+
+        if has_contributions:
+            composed_schemas[composed_path] = composed_schema
+            schemas[composed_path] = composed_schema
+
+    return composed_schemas
+
+
 # --- Variant Generation (Create/Update/Complete) ---
 
 
@@ -766,6 +918,7 @@ def main():
         return
 
     schemas, schema_refs, variant_needs = {}, {}, {}
+    schema_names = {}
     for f in target_dir.rglob("*.json"):
         if "_request.json" in f.name:
             continue
@@ -773,6 +926,8 @@ def main():
             s = load_json(f)
             p_abs = str(f.resolve())
             schemas[p_abs] = s
+            if isinstance(s, dict) and "name" in s:
+                schema_names[s["name"]] = p_abs
         except Exception as e:
             sys.stderr.write(f"Failed to load {f}: {e}\n")
 
@@ -791,6 +946,11 @@ def main():
             "Entity definition not found! 'ucp.json' must define '$defs.entity'"
         )
 
+    # Discover extension compositions from raw schema defs matching base schema names
+    extension_compositions = build_extension_compositions(
+        schemas, schema_names, target_dir
+    )
+
     global_rename_maps = {}
     # Pass 1a: Local flattening, find explicit variant markers, collect renames
     for p_abs, s in schemas.items():
@@ -807,7 +967,14 @@ def main():
             continue
         _rewrite_external_defs_refs(p_abs, s, global_rename_maps)
 
-    # Pass 1c: Save and extract refs
+    # Pass 1c: Extension Composition (merge extension defs into base capabilities)
+    compose_extension_defs(
+        schemas,
+        target_dir,
+        extension_compositions,
+    )
+
+    # Pass 1d: Save and extract refs
     for p_abs, s in schemas.items():
         if "ucp.json" in p_abs or "_request.json" in p_abs:
             continue

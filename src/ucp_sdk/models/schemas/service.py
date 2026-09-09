@@ -103,7 +103,7 @@ class PlatformSchema(BaseModel):
     """
 
 
-class PlatformSchema8(BaseModel):
+class PlatformSchema11(BaseModel):
     """
     Full service declaration for platform-level discovery. All transports require `version`, `spec`, and `transport`. REST, MCP, and embedded additionally require `schema`.
     """
@@ -141,7 +141,7 @@ class PlatformSchema8(BaseModel):
     """
 
 
-class PlatformSchema9(BaseModel):
+class PlatformSchema12(BaseModel):
     """
     Full service declaration for platform-level discovery. All transports require `version`, `spec`, and `transport`. REST, MCP, and embedded additionally require `schema`.
     """
@@ -179,7 +179,7 @@ class PlatformSchema9(BaseModel):
     """
 
 
-class PlatformSchema10(BaseModel):
+class PlatformSchema13(BaseModel):
     """
     Full service declaration for platform-level discovery. All transports require `version`, `spec`, and `transport`. REST, MCP, and embedded additionally require `schema`.
     """
@@ -217,10 +217,10 @@ class PlatformSchema10(BaseModel):
     """
 
 
-PlatformSchema6 = TypeAliasType(
-    "PlatformSchema6",
+PlatformSchema9 = TypeAliasType(
+    "PlatformSchema9",
     Annotated[
-        PlatformSchema | PlatformSchema8 | PlatformSchema9 | PlatformSchema10,
+        PlatformSchema | PlatformSchema11 | PlatformSchema12 | PlatformSchema13,
         Field(..., title="Service (Platform Schema)"),
     ],
 )
