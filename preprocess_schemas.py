@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
+import collections.abc
 import copy
+import json
 import os
 from pathlib import Path
 import sys
+from typing import Any
 
 # --- I/O Helpers ---
 
@@ -513,6 +515,51 @@ def _rewrite_local_to_external_refs(node, ext_rel_path):
             n["$ref"] = ext_rel_path + ref
 
 
+def deep_merge(
+    target: dict[str, Any],
+    updates: dict[str, Any],
+    ext_defs: dict[str, Any] | None = None,
+    ext_rel: str | None = None,
+) -> dict[str, Any]:
+    """Recursively merges keys from `updates` into `target`.
+
+    - If `updates` points to a local $defs with properties, it is dereferenced.
+    - Sibling dictionaries are merged recursively.
+    """
+    for key, value in updates.items():
+        if isinstance(value, collections.abc.Mapping) and isinstance(
+            target.get(key), collections.abc.Mapping
+        ):
+            target_val = target[key]
+            val_copy = copy.deepcopy(value)
+
+            if ext_defs and "$ref" in val_copy:
+                ref = val_copy["$ref"]
+                if "#/$defs/" in ref:
+                    def_name = ref.split("#/$defs/")[-1]
+                    if (
+                        def_name in ext_defs
+                        and "properties" in ext_defs[def_name]
+                    ):
+                        expanded = copy.deepcopy(ext_defs[def_name])
+                        if ext_rel:
+                            _rewrite_local_to_external_refs(expanded, ext_rel)
+                        for k, v in val_copy.items():
+                            if k != "$ref":
+                                expanded[k] = v
+                        val_copy = expanded
+
+            if "$ref" in target_val and (
+                "properties" in val_copy or val_copy.get("type") == "object"
+            ):
+                del target_val["$ref"]
+
+            deep_merge(target_val, val_copy, ext_defs=ext_defs, ext_rel=ext_rel)
+        else:
+            target[key] = value
+    return target
+
+
 def compose_extension_defs(
     schemas,
     target_dir,
@@ -592,7 +639,12 @@ def compose_extension_defs(
                 ext_rel = Path(os.path.relpath(ext_path, base_dir)).as_posix()
                 props_copy = copy.deepcopy(contributed_props)
                 _rewrite_local_to_external_refs(props_copy, ext_rel)
-                composed_schema.setdefault("properties", {}).update(props_copy)
+                deep_merge(
+                    composed_schema.setdefault("properties", {}),
+                    props_copy,
+                    ext_defs=defs,
+                    ext_rel=ext_rel,
+                )
                 has_contributions = True
 
                 sys.stdout.write(
@@ -601,6 +653,26 @@ def compose_extension_defs(
                 )
 
         if has_contributions:
+            # If a property had an original base $ref and was augmented with extension properties,
+            # use allOf so the base $ref is preserved and the Python model inherits from it!
+            base_props = schemas[base_path].get("properties", {})
+            for p_name, p_schema in composed_schema.get(
+                "properties", {}
+            ).items():
+                if (
+                    p_name in base_props
+                    and isinstance(base_props[p_name], dict)
+                    and "$ref" in base_props[p_name]
+                ):
+                    base_ref = base_props[p_name]["$ref"]
+                    if "properties" in p_schema:
+                        props_dict = p_schema.pop("properties")
+                        p_schema.pop("$ref", None)
+                        p_schema["allOf"] = [
+                            {"$ref": base_ref},
+                            {"type": "object", "properties": props_dict},
+                        ]
+
             composed_schemas[composed_path] = composed_schema
             schemas[composed_path] = composed_schema
 

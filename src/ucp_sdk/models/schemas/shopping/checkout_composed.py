@@ -24,15 +24,17 @@ from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field
 
 from .. import ucp as ucp_1
 from ..common import loyalty as loyalty_1
-from ..common import payment_ap2_mandate, payment_terms
+from ..common import payment_ap2_mandate, payment_split_payments, payment_terms
 from ..common.types import context as context_1
 from ..common.types import link, message, policy
 from ..common.types import signals as signals_1
 from ..common.types import totals as totals_1
+from ..common.types.payment import Payment as Payment_1
 from . import buyer_consent, discount
 from . import fulfillment as fulfillment_1
 from .types import attribution as attribution_1
 from .types import line_item, order_confirmation
+from .types.buyer import Buyer as Buyer_1
 
 
 class Config(BaseModel):
@@ -78,6 +80,10 @@ class DevUcpCommonPaymentThreeDsChallengeItem(BaseModel):
 
 
 class Actions(BaseModel):
+    """
+    Outstanding extension-defined Actions for this checkout.
+    """
+
     model_config = ConfigDict(
         extra="allow",
     )
@@ -115,6 +121,42 @@ class Ap2(BaseModel):
     """
 
 
+class Buyer(Buyer_1):
+    """
+    Buyer with consent tracking.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    consent: buyer_consent.Consent | None = None
+    """
+    Per-purpose consent decisions and business-advertised consent options.
+    """
+
+
+class Payment(Payment_1):
+    """
+    Payment details with available and selected payment terms.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    instruments: list[payment_split_payments.PaymentInstrument] | None = None
+    """
+    Payment instruments in allocation priority order.
+    """
+    terms: list[payment_terms.PaymentTerm] | None = Field(None, min_length=1)
+    """
+    Payment terms the Buyer can choose from. An unselected term's amounts are indicative; the selected term's schedule amounts sum to the checkout total.
+    """
+    selected_term_id: str | None = None
+    """
+    ID of the selected payment term. MUST match one `terms[].id` from the latest Checkout response. Present in a response whenever `terms` is, and absent when it is not: the Checkout total is the selected term's total, so a list of terms without a selection would show an amount that matches no stated term. Where the Buyer has made no choice, the Business selects a default. Omitted on create requests because term IDs are checkout-scoped and no terms exist yet, and on complete requests because the term is already agreed by then. Selecting a term is an Update Checkout mutation: the Business response is authoritative for all derived state.
+    """
+
+
 class CheckoutComposed(BaseModel):
     """
     Base checkout schema. Extensions compose onto this using allOf.
@@ -132,7 +174,7 @@ class CheckoutComposed(BaseModel):
     """
     List of line items being checked out.
     """
-    buyer: buyer_consent.Buyer | None = None
+    buyer: Buyer | None = Field(None, title="Buyer with Consent")
     """
     Buyer with consent tracking.
     """
@@ -159,6 +201,9 @@ class CheckoutComposed(BaseModel):
     Different cart totals.
     """
     actions: Actions | None = None
+    """
+    Outstanding extension-defined Actions for this checkout.
+    """
     messages: list[message.Message] | None = None
     """
     List of messages with error and info about the checkout session state.
@@ -179,7 +224,7 @@ class CheckoutComposed(BaseModel):
     """
     URL for checkout handoff and session recovery. MUST be provided when status is requires_escalation. See specification for format and availability requirements.
     """
-    payment: payment_terms.Payment | None = None
+    payment: Payment | None = Field(None, title="Payment with Terms")
     """
     Payment details with available and selected payment terms.
     """

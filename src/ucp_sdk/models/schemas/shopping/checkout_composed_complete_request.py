@@ -18,15 +18,18 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..common import (
     payment_ap2_mandate_complete_request,
+    payment_split_payments_complete_request,
     payment_terms_complete_request,
 )
 from ..common.types import signals_complete_request
+from ..common.types.payment_complete_request import PaymentCompleteRequest
 from . import buyer_consent_complete_request
 from .types import attribution_complete_request
+from .types.buyer_complete_request import BuyerCompleteRequest
 
 
 class Ap2(BaseModel):
@@ -51,6 +54,46 @@ class Ap2(BaseModel):
     """
 
 
+class Buyer(BuyerCompleteRequest):
+    """
+    Buyer with consent tracking.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    consent: buyer_consent_complete_request.Consent | None = None
+    """
+    Per-purpose consent decisions and business-advertised consent options.
+    """
+
+
+class Payment(PaymentCompleteRequest):
+    """
+    Payment details with available and selected payment terms.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    instruments: (
+        list[payment_split_payments_complete_request.PaymentInstrument] | None
+    ) = None
+    """
+    Payment instruments in allocation priority order.
+    """
+    terms: list[payment_terms_complete_request.PaymentTerm] | None = Field(
+        None, min_length=1
+    )
+    """
+    Payment terms the Buyer can choose from. An unselected term's amounts are indicative; the selected term's schedule amounts sum to the checkout total.
+    """
+    selected_term_id: str | None = None
+    """
+    ID of the selected payment term. MUST match one `terms[].id` from the latest Checkout response. Present in a response whenever `terms` is, and absent when it is not: the Checkout total is the selected term's total, so a list of terms without a selection would show an amount that matches no stated term. Where the Buyer has made no choice, the Business selects a default. Omitted on create requests because term IDs are checkout-scoped and no terms exist yet, and on complete requests because the term is already agreed by then. Selecting a term is an Update Checkout mutation: the Business response is authoritative for all derived state.
+    """
+
+
 class CheckoutComposedCompleteRequest(BaseModel):
     """
     Base checkout schema. Extensions compose onto this using allOf.
@@ -59,7 +102,7 @@ class CheckoutComposedCompleteRequest(BaseModel):
     model_config = ConfigDict(
         extra="allow",
     )
-    buyer: buyer_consent_complete_request.Buyer | None = None
+    buyer: Buyer | None = Field(None, title="Buyer with Consent")
     """
     Buyer with consent tracking.
     """
@@ -67,7 +110,7 @@ class CheckoutComposedCompleteRequest(BaseModel):
     attribution: (
         attribution_complete_request.AttributionCompleteRequest | None
     ) = None
-    payment: payment_terms_complete_request.Payment
+    payment: Payment = Field(..., title="Payment with Terms")
     """
     Payment details with available and selected payment terms.
     """

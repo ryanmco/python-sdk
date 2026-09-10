@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict
+from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field
 
 from .. import ucp as ucp_1
 from ..common import loyalty as loyalty_1
@@ -31,6 +31,21 @@ from . import buyer_consent, discount
 from .checkout import Checkout as Checkout_1
 from .types import attribution as attribution_1
 from .types import line_item
+from .types.buyer import Buyer as Buyer_1
+
+
+class Buyer(Buyer_1):
+    """
+    Buyer with consent tracking.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    consent: buyer_consent.Consent | None = None
+    """
+    Per-purpose consent decisions and business-advertised consent options.
+    """
 
 
 class CartComposed(BaseModel):
@@ -56,7 +71,7 @@ class CartComposed(BaseModel):
     """
     signals: signals_1.Signals | None = None
     attribution: attribution_1.Attribution | None = None
-    buyer: buyer_consent.Buyer | None = None
+    buyer: Buyer | None = Field(None, title="Buyer with Consent")
     """
     Buyer with consent tracking.
     """

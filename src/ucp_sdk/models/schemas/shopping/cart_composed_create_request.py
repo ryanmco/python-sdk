@@ -18,12 +18,27 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..common.types import context_create_request, signals_create_request
 from . import buyer_consent_create_request, discount_create_request
 from .checkout_create_request import CheckoutCreateRequest
 from .types import attribution_create_request, line_item_create_request
+from .types.buyer_create_request import BuyerCreateRequest
+
+
+class Buyer(BuyerCreateRequest):
+    """
+    Buyer with consent tracking.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    consent: buyer_consent_create_request.Consent | None = None
+    """
+    Per-purpose consent decisions and business-advertised consent options.
+    """
 
 
 class CartComposedCreateRequest(BaseModel):
@@ -46,7 +61,7 @@ class CartComposedCreateRequest(BaseModel):
     attribution: attribution_create_request.AttributionCreateRequest | None = (
         None
     )
-    buyer: buyer_consent_create_request.Buyer | None = None
+    buyer: Buyer | None = Field(None, title="Buyer with Consent")
     """
     Buyer with consent tracking.
     """

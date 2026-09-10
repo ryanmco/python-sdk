@@ -26,7 +26,7 @@ from typing_extensions import TypeAliasType
 from ..common.types import link, reverse_domain_name
 from .cart import Cart as Cart_1
 from .checkout_complete_request import CheckoutCompleteRequest
-from .types.buyer import Buyer as Buyer_1
+from .types.buyer_complete_request import BuyerCompleteRequest
 
 BuyerConsentExtensionCompleteRequest = TypeAliasType(
     "BuyerConsentExtensionCompleteRequest",
@@ -105,7 +105,7 @@ Per-purpose consent. Keys are reverse-DNS purpose identifiers. UCP defines four 
 """
 
 
-class Buyer(Buyer_1):
+class Buyer(BuyerCompleteRequest):
     """
     Buyer object extended with per-purpose consent.
     """
