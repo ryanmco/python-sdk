@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from ..common.types import context_update_request, signals_update_request
 from . import buyer_consent_update_request, discount_update_request
@@ -29,7 +29,7 @@ from .types.buyer_update_request import BuyerUpdateRequest
 
 class Buyer(BuyerUpdateRequest):
     """
-    Buyer with consent tracking.
+    Optional buyer information for personalized estimates.
     """
 
     model_config = ConfigDict(
@@ -61,9 +61,9 @@ class CartComposedUpdateRequest(BaseModel):
     attribution: attribution_update_request.AttributionUpdateRequest | None = (
         None
     )
-    buyer: Buyer | None = Field(None, title="Buyer with Consent")
+    buyer: Buyer | None = None
     """
-    Buyer with consent tracking.
+    Optional buyer information for personalized estimates.
     """
     discounts: discount_update_request.DiscountsObject | None = None
 

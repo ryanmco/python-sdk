@@ -56,7 +56,7 @@ class Ap2(BaseModel):
 
 class Buyer(BuyerCompleteRequest):
     """
-    Buyer with consent tracking.
+    Representation of the buyer.
     """
 
     model_config = ConfigDict(
@@ -69,10 +69,6 @@ class Buyer(BuyerCompleteRequest):
 
 
 class Payment(PaymentCompleteRequest):
-    """
-    Payment details with available and selected payment terms.
-    """
-
     model_config = ConfigDict(
         extra="allow",
     )
@@ -102,18 +98,15 @@ class CheckoutComposedCompleteRequest(BaseModel):
     model_config = ConfigDict(
         extra="allow",
     )
-    buyer: Buyer | None = Field(None, title="Buyer with Consent")
+    buyer: Buyer | None = None
     """
-    Buyer with consent tracking.
+    Representation of the buyer.
     """
     signals: signals_complete_request.SignalsCompleteRequest | None = None
     attribution: (
         attribution_complete_request.AttributionCompleteRequest | None
     ) = None
-    payment: Payment = Field(..., title="Payment with Terms")
-    """
-    Payment details with available and selected payment terms.
-    """
+    payment: Payment
     ap2: Ap2
     """
     AP2 extension data including merchant authorization.

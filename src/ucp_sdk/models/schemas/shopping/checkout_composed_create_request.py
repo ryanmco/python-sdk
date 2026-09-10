@@ -37,7 +37,7 @@ from .types.buyer_create_request import BuyerCreateRequest
 
 class Buyer(BuyerCreateRequest):
     """
-    Buyer with consent tracking.
+    Representation of the buyer.
     """
 
     model_config = ConfigDict(
@@ -50,10 +50,6 @@ class Buyer(BuyerCreateRequest):
 
 
 class Payment(PaymentCreateRequest):
-    """
-    Payment details with available and selected payment terms.
-    """
-
     model_config = ConfigDict(
         extra="allow",
     )
@@ -87,19 +83,16 @@ class CheckoutComposedCreateRequest(BaseModel):
     """
     List of line items being checked out.
     """
-    buyer: Buyer | None = Field(None, title="Buyer with Consent")
+    buyer: Buyer | None = None
     """
-    Buyer with consent tracking.
+    Representation of the buyer.
     """
     context: context_create_request.ContextCreateRequest | None = None
     signals: signals_create_request.SignalsCreateRequest | None = None
     attribution: attribution_create_request.AttributionCreateRequest | None = (
         None
     )
-    payment: Payment | None = Field(None, title="Payment with Terms")
-    """
-    Payment details with available and selected payment terms.
-    """
+    payment: Payment | None = None
     discounts: discount_create_request.DiscountsObject | None = None
     cart_id: str | None = None
     """

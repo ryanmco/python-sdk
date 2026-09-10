@@ -37,7 +37,7 @@ from .types.buyer_update_request import BuyerUpdateRequest
 
 class Buyer(BuyerUpdateRequest):
     """
-    Buyer with consent tracking.
+    Representation of the buyer.
     """
 
     model_config = ConfigDict(
@@ -50,10 +50,6 @@ class Buyer(BuyerUpdateRequest):
 
 
 class Payment(PaymentUpdateRequest):
-    """
-    Payment details with available and selected payment terms.
-    """
-
     model_config = ConfigDict(
         extra="allow",
     )
@@ -87,19 +83,16 @@ class CheckoutComposedUpdateRequest(BaseModel):
     """
     List of line items being checked out.
     """
-    buyer: Buyer | None = Field(None, title="Buyer with Consent")
+    buyer: Buyer | None = None
     """
-    Buyer with consent tracking.
+    Representation of the buyer.
     """
     context: context_update_request.ContextUpdateRequest | None = None
     signals: signals_update_request.SignalsUpdateRequest | None = None
     attribution: attribution_update_request.AttributionUpdateRequest | None = (
         None
     )
-    payment: Payment | None = Field(None, title="Payment with Terms")
-    """
-    Payment details with available and selected payment terms.
-    """
+    payment: Payment | None = None
     discounts: discount_update_request.DiscountsObject | None = None
     fulfillment: fulfillment_update_request.Fulfillment | None = None
     """

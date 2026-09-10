@@ -123,7 +123,7 @@ class Ap2(BaseModel):
 
 class Buyer(Buyer_1):
     """
-    Buyer with consent tracking.
+    Representation of the buyer.
     """
 
     model_config = ConfigDict(
@@ -136,10 +136,6 @@ class Buyer(Buyer_1):
 
 
 class Payment(Payment_1):
-    """
-    Payment details with available and selected payment terms.
-    """
-
     model_config = ConfigDict(
         extra="allow",
     )
@@ -174,9 +170,9 @@ class CheckoutComposed(BaseModel):
     """
     List of line items being checked out.
     """
-    buyer: Buyer | None = Field(None, title="Buyer with Consent")
+    buyer: Buyer | None = None
     """
-    Buyer with consent tracking.
+    Representation of the buyer.
     """
     context: context_1.Context | None = None
     signals: signals_1.Signals | None = None
@@ -224,10 +220,7 @@ class CheckoutComposed(BaseModel):
     """
     URL for checkout handoff and session recovery. MUST be provided when status is requires_escalation. See specification for format and availability requirements.
     """
-    payment: Payment | None = Field(None, title="Payment with Terms")
-    """
-    Payment details with available and selected payment terms.
-    """
+    payment: Payment | None = None
     order: order_confirmation.OrderConfirmation | None = None
     """
     Details about an order created for this checkout session.

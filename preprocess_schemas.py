@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import collections.abc
+import collections
 import copy
 import json
 import os
@@ -515,49 +515,13 @@ def _rewrite_local_to_external_refs(node, ext_rel_path):
             n["$ref"] = ext_rel_path + ref
 
 
-def deep_merge(
-    target: dict[str, Any],
-    updates: dict[str, Any],
-    ext_defs: dict[str, Any] | None = None,
-    ext_rel: str | None = None,
-) -> dict[str, Any]:
-    """Recursively merges keys from `updates` into `target`.
-
-    - If `updates` points to a local $defs with properties, it is dereferenced.
-    - Sibling dictionaries are merged recursively.
-    """
-    for key, value in updates.items():
-        if isinstance(value, collections.abc.Mapping) and isinstance(
-            target.get(key), collections.abc.Mapping
-        ):
-            target_val = target[key]
-            val_copy = copy.deepcopy(value)
-
-            if ext_defs and "$ref" in val_copy:
-                ref = val_copy["$ref"]
-                if "#/$defs/" in ref:
-                    def_name = ref.split("#/$defs/")[-1]
-                    if (
-                        def_name in ext_defs
-                        and "properties" in ext_defs[def_name]
-                    ):
-                        expanded = copy.deepcopy(ext_defs[def_name])
-                        if ext_rel:
-                            _rewrite_local_to_external_refs(expanded, ext_rel)
-                        for k, v in val_copy.items():
-                            if k != "$ref":
-                                expanded[k] = v
-                        val_copy = expanded
-
-            if "$ref" in target_val and (
-                "properties" in val_copy or val_copy.get("type") == "object"
-            ):
-                del target_val["$ref"]
-
-            deep_merge(target_val, val_copy, ext_defs=ext_defs, ext_rel=ext_rel)
-        else:
-            target[key] = value
-    return target
+def _normalize_ucp_request(marker: Any) -> dict[str, Any]:
+    """Normalizes a ucp_request marker into an {operation: status} mapping."""
+    if isinstance(marker, dict):
+        return dict(marker)
+    if isinstance(marker, str):
+        return {"create": marker, "update": marker}
+    return {}
 
 
 def compose_extension_defs(
@@ -568,21 +532,13 @@ def compose_extension_defs(
     """Create new composed schema files for base capabilities with all extensions.
 
     UCP extension schemas (fulfillment, discount, buyer_consent, cart) declare
-    composition defs (e.g. a ``checkout`` def extending ``checkout.json`` with
-    extra properties). For each base capability with extensions, this function
-    creates a separate composed schema file (e.g. ``checkout_composed.json``)
-    combining the base capability with all contributed extension properties,
-    without mutating the original base schema or deleting extension defs.
+    compositions by defining $defs.<base_capability> (e.g. $defs.checkout,
+    $defs.cart) with an allOf containing a $ref to the base schema and
+    contributed properties.
 
-    This function:
-    1. Looks up base schemas for each discovered composition def.
-    2. Collects contributed properties from contributing extension schemas.
-    3. Rewrites local ``$ref`` pointers to external refs (relative to the
-       base schema).
-    4. Creates a new composed schema (``{stem}_composed.json``) merging all
-       contributed properties onto a copy of the base schema.
-    5. Adds the composed schema to ``schemas`` so that it is saved and request
-       variants are generated downstream.
+    This function discovers all such compositions and generates composed
+    schemas (e.g. checkout_composed.json) that contain the union of all
+    contributed properties alongside the base schema properties.
     """
     composed_schemas = {}
     for def_name, base_rel in extension_compositions.items():
@@ -590,31 +546,30 @@ def compose_extension_defs(
         if base_path not in schemas:
             continue
 
-        base_path_obj = Path(base_path)
-        base_dir = base_path_obj.parent
-        composed_stem = f"{base_path_obj.stem}_composed"
-        composed_filename = f"{composed_stem}.json"
-        composed_path = str((base_dir / composed_filename).resolve())
+        base_dir = Path(base_path).parent
+        composed_filename = Path(base_path).stem + "_composed.json"
+        composed_path = str(base_dir / composed_filename)
 
-        if composed_path in composed_schemas:
-            composed_schema = composed_schemas[composed_path]
-        else:
-            composed_schema = copy.deepcopy(schemas[base_path])
-            if "title" in composed_schema:
-                composed_schema["title"] = (
-                    f"{composed_schema['title']} Composed"
-                )
-            if "name" in composed_schema:
-                composed_schema["name"] = f"{composed_schema['name']}_composed"
-            if "$id" in composed_schema:
-                id_str = composed_schema["$id"]
-                if id_str.endswith(".json"):
-                    id_str = id_str.rsplit("/", 1)[0] + "/" + composed_filename
-                composed_schema["$id"] = id_str
+        composed_schema = copy.deepcopy(schemas[base_path])
+        composed_schema["title"] = (
+            composed_schema.get("title", Path(base_path).stem.capitalize())
+            + " Composed"
+        )
+        if "name" in composed_schema:
+            composed_schema["name"] = composed_schema["name"] + "_composed"
+        if "$id" in composed_schema:
+            id_str = composed_schema["$id"]
+            if id_str.endswith(".json"):
+                id_str = id_str.rsplit("/", 1)[0] + "/" + composed_filename
+            composed_schema["$id"] = id_str
 
-        has_contributions = False
+        base_original_props = schemas[base_path].get("properties", {})
+        prop_contributions = collections.defaultdict(list)
         for ext_path in list(schemas):
-            if ext_path in (base_path, composed_path):
+            if ext_path.endswith("_composed.json") or ext_path in (
+                base_path,
+                composed_path,
+            ):
                 continue
 
             ext_schema = schemas[ext_path]
@@ -638,40 +593,93 @@ def compose_extension_defs(
             if contributed_props:
                 ext_rel = Path(os.path.relpath(ext_path, base_dir)).as_posix()
                 props_copy = copy.deepcopy(contributed_props)
+
+                # If a contributed property augments an existing base property,
+                # dereference any local $defs pointer so its properties can be merged in allOf.
+                # This is needed if the allOf external ref contains local references in its file.
+                for prop_name, prop_val in list(props_copy.items()):
+                    if (
+                        prop_name in base_original_props
+                        and isinstance(prop_val, dict)
+                        and "$ref" in prop_val
+                    ):
+                        ref = prop_val["$ref"]
+                        if ref.startswith("#/$defs/"):
+                            def_key = ref.split("/")[-1]
+                            if def_key in defs and (
+                                "properties" in defs[def_key]
+                                or "allOf" in defs[def_key]
+                            ):
+                                expanded = copy.deepcopy(defs[def_key])
+                                _rewrite_local_to_external_refs(
+                                    expanded, ext_rel
+                                )
+                                for k, v in prop_val.items():
+                                    if k != "$ref":
+                                        expanded[k] = v
+                                props_copy[prop_name] = expanded
+
                 _rewrite_local_to_external_refs(props_copy, ext_rel)
-                deep_merge(
-                    composed_schema.setdefault("properties", {}),
-                    props_copy,
-                    ext_defs=defs,
-                    ext_rel=ext_rel,
-                )
-                has_contributions = True
+                for prop_name, prop_val in props_copy.items():
+                    prop_contributions[prop_name].append(prop_val)
 
                 sys.stdout.write(
                     f"Composed {def_name} from {Path(ext_path).name} "
                     f"into {composed_filename}\n"
                 )
 
-        if has_contributions:
-            # If a property had an original base $ref and was augmented with extension properties,
-            # use allOf so the base $ref is preserved and the Python model inherits from it!
-            base_props = schemas[base_path].get("properties", {})
-            for p_name, p_schema in composed_schema.get(
-                "properties", {}
-            ).items():
-                if (
-                    p_name in base_props
-                    and isinstance(base_props[p_name], dict)
-                    and "$ref" in base_props[p_name]
-                ):
-                    base_ref = base_props[p_name]["$ref"]
-                    if "properties" in p_schema:
-                        props_dict = p_schema.pop("properties")
-                        p_schema.pop("$ref", None)
-                        p_schema["allOf"] = [
-                            {"$ref": base_ref},
-                            {"type": "object", "properties": props_dict},
-                        ]
+        if prop_contributions:
+            base_props = composed_schema.setdefault("properties", {})
+            for prop_name, contributions in prop_contributions.items():
+                if prop_name in base_props:
+                    base_val = base_props[prop_name]
+                    metadata = {
+                        k: base_val[k]
+                        for k in ("description", "ucp_response")
+                        if k in base_val
+                    }
+                    ucp_req = _normalize_ucp_request(
+                        base_val.get("ucp_request")
+                    )
+                    for contrib in contributions:
+                        if isinstance(contrib, dict):
+                            ucp_req.update(
+                                _normalize_ucp_request(
+                                    contrib.get("ucp_request")
+                                )
+                            )
+                    if ucp_req:
+                        metadata["ucp_request"] = ucp_req
+
+                    all_of = []
+                    if "allOf" in base_val:
+                        all_of.extend(base_val["allOf"])
+                    else:
+                        all_of.append(base_val)
+                    all_of.extend(contributions)
+                    new_val = {"allOf": all_of}
+                    new_val.update(metadata)
+                    base_props[prop_name] = new_val
+                elif len(contributions) > 1:
+                    metadata = {}
+                    ucp_req = {}
+                    for contrib in contributions:
+                        if isinstance(contrib, dict):
+                            for k in ("description", "ucp_response"):
+                                if k in contrib:
+                                    metadata[k] = contrib[k]
+                            ucp_req.update(
+                                _normalize_ucp_request(
+                                    contrib.get("ucp_request")
+                                )
+                            )
+                    if ucp_req:
+                        metadata["ucp_request"] = ucp_req
+                    new_val = {"allOf": contributions}
+                    new_val.update(metadata)
+                    base_props[prop_name] = new_val
+                else:
+                    base_props[prop_name] = contributions[0]
 
             composed_schemas[composed_path] = composed_schema
             schemas[composed_path] = composed_schema
@@ -683,8 +691,8 @@ def compose_extension_defs(
 
 
 def get_required_ops(schema):
-    """
-    Scans a schema for the custom 'ucp_request' metadata.
+    """Scans a schema for the custom 'ucp_request' metadata.
+
     Returns a set of operation keys (e.g. {'create', 'update'}) that need distinct models.
     """
     ops = set()
