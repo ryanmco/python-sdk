@@ -20,8 +20,8 @@ set -euo pipefail
 # Ensure we are in the script's directory
 cd "$(dirname "$0")"
 
-# Add ~/.local/bin to PATH for uv
-export PATH="$HOME/.local/bin:$PATH"
+# Add ~/.cargo/bin and ~/.local/bin to PATH for ucp-schema and uv
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 if ! command -v git &> /dev/null; then
     echo "Error: git not found. Please install git."
@@ -77,6 +77,7 @@ cleanup() {
 trap cleanup EXIT
 
 INPUT_ARG="${1:-}"
+vertical="${2:-shopping}"
 if [ -n "$INPUT_ARG" ] && [ -d "$INPUT_ARG" ]; then
     INPUT_DIR="$INPUT_ARG"
     echo "Using local UCP directory: $INPUT_DIR"
@@ -122,12 +123,12 @@ fi
 
 OUTPUT_DIR="src/ucp_sdk/models/schemas"
 
-# Scope compilation to Shopping + Common + Transports so other verticals do not bleed in.
+# Scope compilation to the target vertical + Common + Transports so other verticals do not bleed in.
 SCOPED_SCHEMA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ucp-schemas.XXXXXX")"
 if compgen -G "$SCHEMA_DIR/*.json" > /dev/null; then
     cp "$SCHEMA_DIR"/*.json "$SCOPED_SCHEMA_DIR"/
 fi
-for dir in common transports shopping; do
+for dir in common transports "$vertical"; do
     if [ -d "$SCHEMA_DIR/$dir" ]; then
         cp -R "$SCHEMA_DIR/$dir" "$SCOPED_SCHEMA_DIR/$dir"
     fi
